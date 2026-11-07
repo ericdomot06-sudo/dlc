@@ -1275,6 +1275,44 @@ function exportSet() {
   if (sc === 'alert') a = a.filter(p => status(p) !== 'ok');
   return a;
 }
+
+/* ▼▼▼ NOUVEAU : helpers de groupement Lieu → Emplacement ▼▼▼ */
+function groupProductsByPlace(products) {
+  const map = new Map();
+  products.forEach(p => {
+    const pairs = productPlaces(p);
+    const safePairs = pairs.length ? pairs : [{ loc: 'Sans lieu', place: '—' }];
+    safePairs.forEach(({ loc, place }) => {
+      const kLieu = loc || 'Sans lieu';
+      const kPlace = place || '—';
+      if (!map.has(kLieu)) map.set(kLieu, new Map());
+      const em = map.get(kLieu);
+      if (!em.has(kPlace)) em.set(kPlace, []);
+      const bucket = em.get(kPlace);
+      if (!bucket.includes(p)) bucket.push(p);
+    });
+  });
+  const sortFr = (a, b) => String(a || '').localeCompare(String(b || ''), 'fr', { sensitivity: 'base' });
+  return Array.from(map.keys()).sort(sortFr).map(lieu => ({
+    lieu,
+    emplacements: Array.from(map.get(lieu).entries())
+      .sort((a, b) => sortFr(a[0], b[0]))
+      .map(([place, prods]) => ({
+        place,
+        prods: prods.slice().sort((a, b) => sortFr(a.name, b.name))
+      }))
+  }));
+}
+function restText(p) {
+  if (!p.date) return '—';
+  const n = daysLeft(p.date);
+  if (n < 0) return '-' + (-n) + ' j';
+  if (n === 0) return 'auj.';
+  if (n === 1) return 'demain';
+  return n + ' j';
+}
+/* ▲▲▲ fin NOUVEAU ▲▲▲ */
+
 async function shareFile(blob, name) {
   const file = new File([blob], name, { type: blob.type });
   try {
@@ -1293,21 +1331,41 @@ async function shareFile(blob, name) {
   a.remove();
   toast('Fichier enregistré dans Téléchargements');
 }
+
+/* ▼▼▼ CSV : tri Lieu → Emplacement → Produit ▼▼▼ */
 $('#expCsv').onclick = () => {
+  const groups = groupProductsByPlace(exportSet());
   const rows = [[
-    'Nom', 'Marque', 'Lieux / Emplacements', 'Type', 'Date',
-    'Jours restants', 'Statut', 'Quantité', 'Code-barres', 'Note'
-  ]].concat(exportSet().map(p => [
-    p.name, p.brand || '', placeText(p), p.type,
-    p.date ? fmtDate(p.date) : 'Sans date',
-    daysLeft(p.date), stLabel[status(p)], p.qty,
-    p.barcode || '', p.note || ''
-  ]));
+    'Lieu', 'Emplacement', 'Produit', 'Marque',
+    'Type', 'Date', 'Jours restants', 'Statut',
+    'Quantité', 'Code-barres', 'Note'
+  ]];
+  groups.forEach(({ lieu, emplacements }) => {
+    emplacements.forEach(({ place, prods }) => {
+      prods.forEach(p => {
+        rows.push([
+          lieu,
+          place === '—' ? '' : place,
+          p.name,
+          p.brand || '',
+          p.type,
+          p.date ? fmtDate(p.date) : 'Sans date',
+          p.date ? String(daysLeft(p.date)) : '',
+          stLabel[status(p)],
+          p.qty,
+          p.barcode || '',
+          p.note || ''
+        ]);
+      });
+    });
+  });
   const csv = '\ufeff' + rows.map(r =>
     r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')
   ).join('\r\n');
   shareFile(new Blob([csv], { type: 'text/csv' }), 'frigotrack_' + todayStr() + '.csv');
 };
+
+/* ▼▼▼ PDF : une page par lieu, sous-titres emplacements, pied de page ▼▼▼ */
 $('#expPdf').onclick = async () => {
   try {
     await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
@@ -1318,31 +1376,117 @@ $('#expPdf').onclick = async () => {
   }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  const a = exportSet();
-  doc.setFontSize(16);
-  doc.text('FrigoTrack – inventaire au ' + fmtDate(todayStr()), 14, 16);
+  const all = exportSet();
+  const groups = groupProductsByPlace(all);
+  const pageH = doc.internal.pageSize.getHeight();
+  const pageW = doc.internal.pageSize.getWidth();
+
+  /* Comptage statuts */
+  const counts = { ok: 0, bientot: 0, perime: 0 };
+  all.forEach(p => { counts[status(p)]++; });
+  const summary = [
+    counts.perime ? `🔴 ${counts.perime} périmé(s)` : '',
+    counts.bientot ? `🟠 ${counts.bientot} bientôt` : '',
+    counts.ok ? `🟢 ${counts.ok} OK` : ''
+  ].filter(Boolean).join('   ·   ') || 'Aucun produit';
+
+  /* Page 1 : entête + résumé */
+  doc.setFontSize(18);
+  doc.setTextColor(60, 40, 30);
+  doc.text('FrigoTrack — Inventaire', 14, 20);
+
+  doc.setFontSize(11);
+  doc.setTextColor(90, 90, 90);
+  doc.text(
+    `Au ${fmtDate(todayStr())}   ·   ${all.length} produit(s)   ·   alerte à ${state.settings.delay} j`,
+    14, 28
+  );
+
   doc.setFontSize(10);
-  doc.text(`${a.length} produit(s) · alerte à ${state.settings.delay} jours`, 14, 23);
-  doc.autoTable({
-    startY: 28,
-    head: [['Produit', 'Lieu / Emplacement', 'Type', 'Date', 'Jours', 'Statut', 'Qté']],
-    body: a.map(p => [
-      p.name + (p.brand ? ' (' + p.brand + ')' : ''),
-      placeText(p), p.type,
-      p.date ? fmtDate(p.date) : 'Sans date',
-      daysLeft(p.date), stLabel[status(p)], p.qty
-    ]),
-    styles: { fontSize: 9 },
-    headStyles: { fillColor: [255, 176, 136], textColor: [60, 40, 30] },
-    didParseCell: d => {
-      if (d.section === 'body' && d.column.index === 5) {
-        const v = d.cell.raw;
-        d.cell.styles.fillColor =
-          v === 'Périmé' ? [255, 207, 207] :
-          v === 'Bientôt' ? [255, 231, 184] : [207, 239, 217];
+  doc.setTextColor(60, 60, 60);
+  doc.text(summary, 14, 35);
+
+  let y = 48;
+  let firstLieu = true;
+
+  groups.forEach(({ lieu, emplacements }) => {
+    /* Une page par lieu (sauf le premier qui partage la page 1) */
+    if (!firstLieu) { doc.addPage(); y = 20; }
+    firstLieu = false;
+
+    /* Titre du lieu */
+    doc.setFontSize(15);
+    doc.setTextColor(60, 40, 30);
+    doc.text(`Lieu : ${lieu}`, 14, y);
+    y += 6;
+
+    const totalLieu = emplacements.reduce((s, e) => s + e.prods.length, 0);
+    doc.setFontSize(9);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`${totalLieu} produit(s) · ${emplacements.length} emplacement(s)`, 14, y);
+    y += 8;
+
+    emplacements.forEach(({ place, prods }) => {
+      /* Anti-orphelin : si peu de place restante, nouvelle page avec rappel du lieu */
+      if (y > pageH - 55) {
+        doc.addPage();
+        y = 20;
+        doc.setFontSize(11);
+        doc.setTextColor(120, 120, 120);
+        doc.text(`Lieu : ${lieu} (suite)`, 14, y);
+        y += 8;
       }
-    }
+
+      doc.setFontSize(12);
+      doc.setTextColor(80, 60, 50);
+      doc.text(`Emplacement : ${place}`, 14, y);
+      y += 5;
+
+      doc.autoTable({
+        startY: y,
+        head: [['Produit', 'Type', 'Date', 'Reste', 'Statut', 'Qté']],
+        body: prods.map(p => [
+          p.name + (p.brand ? ' (' + p.brand + ')' : ''),
+          p.type || '',
+          p.date ? fmtDate(p.date) : 'Sans date',
+          restText(p),
+          stLabel[status(p)],
+          p.qty
+        ]),
+        styles: { fontSize: 9, cellPadding: 2 },
+        headStyles: { fillColor: [255, 176, 136], textColor: [60, 40, 30] },
+        margin: { left: 14, right: 14 },
+        didParseCell: d => {
+          if (d.section === 'body' && d.column.index === 4) {
+            const v = String(d.cell.raw || '');
+            if (/périm/i.test(v))            d.cell.styles.fillColor = [255, 207, 207];
+            else if (/bient[oô]t/i.test(v))  d.cell.styles.fillColor = [255, 231, 184];
+            else                             d.cell.styles.fillColor = [207, 239, 217];
+          }
+        }
+      });
+      y = doc.lastAutoTable.finalY + 8;
+    });
   });
+
+  if (!groups.length) {
+    doc.setFontSize(12);
+    doc.setTextColor(100, 100, 100);
+    doc.text("Aucun produit dans l'inventaire.", 14, 55);
+  }
+
+  /* Pied de page sur toutes les pages */
+  const total = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(
+      `FrigoTrack · ${fmtDate(todayStr())} · page ${i}/${total}`,
+      pageW - 14, pageH - 8, { align: 'right' }
+    );
+  }
+
   shareFile(doc.output('blob'), 'frigotrack_' + todayStr() + '.pdf');
 };
 
