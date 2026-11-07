@@ -1,0 +1,15 @@
+{
+  "name": "FrigoTrack",
+  "short_name": "FrigoTrack",
+  "description": "Suivi des dates de péremption des produits alimentaires",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF7F2",
+  "theme_color": "#FFB088",
+  "lang": "fr",
+  "icons": [
+    { "src": "icon.svg", "sizes": "192x192 512x512", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
