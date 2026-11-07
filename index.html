@@ -365,6 +365,60 @@ renderBanner = function () {
 
 if (state) renderBanner();
 </script>
+<script>
+/* La date devient facultative */
+document.querySelector('#pDate').previousElementSibling.textContent =
+  'Date (facultative)';
+
+document.querySelector('#pDate').required = false;
+
+/* Seul le nom est obligatoire */
+readForm = function () {
+  const name = $('#pName').value.trim();
+  const date = $('#pDate').value;
+
+  if (!name) {
+    toast('Le nom du produit est obligatoire');
+    return null;
+  }
+
+  return {
+    name,
+    brand: $('#pBrand').value.trim(),
+    barcode: $('#pCode').value.trim(),
+    date,
+    type: $('#pType').value,
+    qty: Math.max(1, parseInt($('#pQty').value) || 1),
+    cat: $('#pCat').value || state.categories[0],
+    note: $('#pNote').value.trim(),
+    photo: photoData
+  };
+};
+
+/* Sans date : aucune alerte de péremption */
+const statutAvecDate = status;
+status = function (produit) {
+  if (!produit.date) return 'ok';
+  return statutAvecDate(produit);
+};
+
+/* Texte affiché dans la liste et la fiche */
+const texteAvecDate = dayText;
+dayText = function (produit) {
+  if (!produit.date) return 'Sans date';
+  return texteAvecDate(produit);
+};
+
+/* Évite une valeur invalide dans les exports */
+const joursAvecDate = daysLeft;
+daysLeft = function (date) {
+  if (!date) return '';
+  return joursAvecDate(date);
+};
+
+/* Actualise l’affichage si les données sont déjà chargées */
+if (state) renderList();
+</script>
 
 </body>
 </html>
