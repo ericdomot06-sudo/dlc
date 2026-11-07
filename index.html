@@ -250,5 +250,121 @@ $('#histBtn').onclick=()=>{const h=state.history.slice().reverse();sheet('<h2>Hi
 async function init(){try{const s=await dbGet('state');state=s?{...DEF,...s,settings:{...DEF.settings,...s.settings}}:JSON.parse(JSON.stringify(DEF))}catch(e){state=JSON.parse(JSON.stringify(DEF));toast('Stockage indisponible : '+e)}applyTheme();fillCats();renderList();if('serviceWorker'in navigator){navigator.serviceWorker.register('./sw.js').then(()=>{if('Notification'in window&&Notification.permission==='granted')registerPeriodic()}).catch(()=>{})}checkNotif(false);setInterval(()=>checkNotif(false),15*60*1000);document.addEventListener('visibilitychange',()=>{if(!document.hidden){renderList();checkNotif(false)}});if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}
 init();
 </script>
+ <style>
+/* Tableau de bord */
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.accueil {
+  margin-bottom: 20px;
+}
+.accueil h2 {
+  margin: 8px 0 4px;
+  font-size: 26px;
+}
+.accueil p {
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.compteurs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.compteur {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  padding: 18px 8px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.compteur strong {
+  display: block;
+  font-size: 30px;
+  margin-bottom: 4px;
+}
+.compteur span {
+  font-size: 13px;
+}
+.compteur.alerte {
+  background: var(--bad);
+  color: var(--badt);
+}
+.compteur.attention {
+  background: var(--warn);
+  color: var(--warnt);
+}
+.actions-accueil {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.actions-accueil button {
+  flex: 1;
+}
+</style>
+
+<script>
+/* Ajout de la nouvelle présentation */
+const accueil = document.createElement('div');
+accueil.className = 'accueil';
+accueil.innerHTML = `
+  <h2>Mon inventaire</h2>
+  <p>Vos produits et leurs dates, en un coup d’œil.</p>
+
+  <div class="compteurs">
+    <div class="compteur">
+      <strong id="totalProduits">0</strong>
+      <span>📦 Produits</span>
+    </div>
+    <div class="compteur alerte">
+      <strong id="totalPerimes">0</strong>
+      <span>⛔ Périmés</span>
+    </div>
+    <div class="compteur attention">
+      <strong id="totalBientot">0</strong>
+      <span>⏳ Bientôt</span>
+    </div>
+  </div>
+
+  <div class="actions-accueil">
+    <button class="btn" id="ajouterAccueil">
+      ＋ Ajouter
+    </button>
+    <button class="btn sec" id="scannerAccueil">
+      📷 Scanner
+    </button>
+  </div>
+`;
+
+document.querySelector('#v-list').prepend(accueil);
+
+document.querySelector('#ajouterAccueil').onclick =
+  () => openForm();
+
+document.querySelector('#scannerAccueil').onclick =
+  () => showView('scan');
+
+/* Actualisation des compteurs avec la liste existante */
+const actualiserBanniere = renderBanner;
+renderBanner = function () {
+  actualiserBanniere();
+
+  document.querySelector('#totalProduits').textContent =
+    state.products.length;
+
+  document.querySelector('#totalPerimes').textContent =
+    state.products.filter(p => status(p) === 'perime').length;
+
+  document.querySelector('#totalBientot').textContent =
+    state.products.filter(p => status(p) === 'bientot').length;
+};
+
+if (state) renderBanner();
+</script>
+
 </body>
 </html>
