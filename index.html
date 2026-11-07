@@ -419,6 +419,678 @@ daysLeft = function (date) {
 /* Actualise l’affichage si les données sont déjà chargées */
 if (state) renderList();
 </script>
+<script>
+/* ============================================================
+   Lieux et emplacements — à placer après les scripts existants
+   ============================================================ */
+
+/* Remplacement des éléments de l'ancienne interface */
+$('#fCat').outerHTML =
+  '<select id="fLoc"><option value="">Tous les lieux</option></select>' +
+  '<select id="fPlace"><option value="">Tous les emplacements</option></select>';
+
+$('#fSort option[value="cat"]').value = 'loc';
+$('#fSort option[value="loc"]').textContent = 'Tri : lieu';
+
+const qtyRow = $('#pCat').closest('.row');
+qtyRow.innerHTML =
+  '<div><label>Quantité</label><input type="number" id="pQty" min="1" value="1"></div>';
+
+qtyRow.insertAdjacentHTML('afterend', `
+  <label>Lieu</label><select id="pLoc"></select>
+  <label>Emplacement</label><select id="pPlace"></select>
+  <button type="button" class="btn sec full" id="pAddPlace">
+    ＋ Associer cet emplacement
+  </button>
+  <div id="pPlaces" class="cats" style="margin-top:8px"></div>
+  <small>Un produit peut être associé à plusieurs lieux et emplacements.</small>
+`);
+
+$('#cats').closest('.card').outerHTML = `
+  <div class="card">
+    <h3>Lieux de stockage</h3>
+    <div class="cats" id="locationsList"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="locationNew" placeholder="Nouveau lieu">
+      <button class="btn" id="locationAdd" style="flex:0 0 auto">＋</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Emplacements par lieu</h3>
+    <label>Lieu concerné</label>
+    <select id="settingsLoc"></select>
+    <div class="cats" id="placesList" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px">
+      <input id="placeNew" placeholder="Nouvel emplacement">
+      <button class="btn" id="placeAdd" style="flex:0 0 auto">＋</button>
+    </div>
+  </div>
+`);
+
+/* Données et compatibilité avec d'éventuels anciens produits */
+function ensurePlaces() {
+  if (!state) return;
+
+  let changed = false;
+  if (!Array.isArray(state.locations)) {
+    state.locations = [
+      'Maison Lavandou',
+      'Appartement Nice',
+      'Appartement Lavandou'
+    ];
+    changed = true;
+  }
+  if (!state.placeByLoc || typeof state.placeByLoc !== 'object') {
+    state.placeByLoc = {};
+    changed = true;
+  }
+
+  for (const loc of state.locations) {
+    if (!Array.isArray(state.placeByLoc[loc])) {
+      state.placeByLoc[loc] = ['Placard', 'Frigo', 'Congélateur'];
+      changed = true;
+    }
+  }
+
+  /* Sécurité si un produit de test n'a finalement pas été supprimé. */
+  for (const p of state.products) {
+    if (!Array.isArray(p.places)) {
+      const loc = state.locations[0] || 'Maison Lavandou';
+      const place = p.cat || 'Placard';
+
+      if (!state.locations.includes(loc)) state.locations.push(loc);
+      if (!Array.isArray(state.placeByLoc[loc])) state.placeByLoc[loc] = [];
+      if (!state.placeByLoc[loc].includes(place)) {
+        state.placeByLoc[loc].push(place);
+      }
+      p.places = [{loc, place}];
+      changed = true;
+    }
+  }
+
+  if (changed) save();
+}
+
+function productPlaces(p) {
+  return Array.isArray(p.places) ? p.places : [];
+}
+
+function placeText(p) {
+  return productPlaces(p)
+    .map(x => x.loc + ' / ' + x.place)
+    .join(' · ');
+}
+
+function locationOptions(selected = '') {
+  return state.locations.map(loc =>
+    `<option value="${esc(loc)}" ${loc === selected ? 'selected' : ''}>${esc(loc)}</option>`
+  ).join('');
+}
+
+/* Filtres de l'inventaire */
+fillCats = function () {
+  ensurePlaces();
+
+  const previousLoc = $('#fLoc').value;
+  const previousPlace = $('#fPlace').value;
+
+  $('#fLoc').innerHTML =
+    '<option value="">Tous les lieux</option>' + locationOptions(previousLoc);
+
+  if (previousLoc && state.locations.includes(previousLoc)) {
+    $('#fLoc').value = previousLoc;
+  }
+
+  fillFilterPlaces(previousPlace);
+};
+
+function fillFilterPlaces(wanted = '') {
+  const loc = $('#fLoc').value;
+  const all = loc
+    ? (state.placeByLoc[loc] || [])
+    : [...new Set(
+        state.locations.flatMap(x => state.placeByLoc[x] || [])
+      )].sort((a, b) => a.localeCompare(b, 'fr'));
+
+  $('#fPlace').innerHTML =
+    '<option value="">Tous les emplacements</option>' +
+    all.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+
+  if (all.includes(wanted)) $('#fPlace').value = wanted;
+}
+
+$('#fLoc').onchange = () => {
+  fillFilterPlaces();
+  renderList();
+};
+$('#fPlace').onchange = renderList;
+
+filtered = function () {
+  const q = $('#q').value.trim().toLowerCase();
+  const loc = $('#fLoc').value;
+  const place = $('#fPlace').value;
+  const s = $('#fStat').value;
+  const sort = $('#fSort').value;
+
+  const a = state.products.filter(p => {
+    const pairs = productPlaces(p);
+    const text = [
+      p.name, p.brand || '', p.note || '', placeText(p)
+    ].join(' ').toLowerCase();
+
+    return (!q || text.includes(q)) &&
+      (!loc && !place ||
+        pairs.some(x => (!loc || x.loc === loc) &&
+                        (!place || x.place === place))) &&
+      (!s || status(p) === s);
+  });
+
+  a.sort((x, y) => {
+    if (sort === 'name') return x.name.localeCompare(y.name, 'fr');
+    if (sort === 'loc') {
+      return placeText(x).localeCompare(placeText(y), 'fr');
+    }
+    /* Les produits sans date apparaissent après ceux qui ont une date. */
+    return (x.date || '9999-12-31')
+      .localeCompare(y.date || '9999-12-31');
+  });
+
+  return a;
+};
+
+renderList = function () {
+  ensurePlaces();
+  const a = filtered();
+  const list = $('#list');
+
+  if (!a.length) {
+    list.innerHTML = '<div class="empty">' +
+      (state.products.length
+        ? 'Aucun produit ne correspond.'
+        : 'Aucun produit.<br>Appuyez sur ＋ ou scannez un code-barres.') +
+      '</div>';
+  } else {
+    list.innerHTML = a.map(p => {
+      const st = status(p);
+      return `
+        <div class="card item ${st}" data-id="${esc(p.id)}">
+          ${p.photo
+            ? `<img class="thumb" src="${p.photo}">`
+            : '<div class="thumb">🥫</div>'}
+          <div class="t">
+            <div class="n">${esc(p.name)}${p.qty > 1 ? ' ×' + p.qty : ''}</div>
+            <div class="s">${esc(p.brand || '')}
+              <span class="chip">${esc(placeText(p))}</span>
+            </div>
+            <div class="s">${p.date ? fmtDate(p.date) : 'Sans date'}
+              ${p.date ? ' · ' + esc(p.type) : ''}
+            </div>
+          </div>
+          <span class="badge ${bcls(st)}">${dayText(p)}</span>
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.item').forEach(el => {
+      el.onclick = () => openDetail(el.dataset.id);
+    });
+  }
+
+  renderBanner();
+};
+
+/* Formulaire : plusieurs couples lieu / emplacement */
+let selectedPlaces = [];
+
+function fillFormLocations(wanted = '') {
+  $('#pLoc').innerHTML = locationOptions(wanted);
+
+  if (state.locations.includes(wanted)) $('#pLoc').value = wanted;
+  fillFormPlaces();
+}
+
+function fillFormPlaces(wanted = '') {
+  const places = state.placeByLoc[$('#pLoc').value] || [];
+  $('#pPlace').innerHTML = places.map(x =>
+    `<option value="${esc(x)}">${esc(x)}</option>`
+  ).join('');
+
+  if (places.includes(wanted)) $('#pPlace').value = wanted;
+}
+
+function renderSelectedPlaces() {
+  $('#pPlaces').innerHTML = selectedPlaces.map((x, i) => `
+    <span>${esc(x.loc)} / ${esc(x.place)}
+      <b data-index="${i}" title="Retirer">✕</b>
+    </span>
+  `).join('');
+
+  $('#pPlaces').querySelectorAll('b').forEach(b => {
+    b.onclick = () => {
+      selectedPlaces.splice(Number(b.dataset.index), 1);
+      renderSelectedPlaces();
+    };
+  });
+}
+
+$('#pLoc').onchange = () => fillFormPlaces();
+
+$('#pAddPlace').onclick = () => {
+  const loc = $('#pLoc').value;
+  const place = $('#pPlace').value;
+
+  if (!loc || !place) {
+    toast('Créez un lieu et un emplacement dans Réglages');
+    return;
+  }
+  if (selectedPlaces.some(x => x.loc === loc && x.place === place)) {
+    toast('Cet emplacement est déjà associé');
+    return;
+  }
+
+  selectedPlaces.push({loc, place});
+  renderSelectedPlaces();
+};
+
+openForm = function (p) {
+  ensurePlaces();
+  p = p || {};
+
+  editId = p.id || null;
+  photoData = p.photo || null;
+
+  $('#formTitle').textContent =
+    editId ? 'Modifier le produit' : 'Nouveau produit';
+  $('#pName').value = p.name || '';
+  $('#pBrand').value = p.brand || '';
+  $('#pCode').value = p.barcode || '';
+  $('#pDate').value = p.date || '';
+  $('#pType').value = p.type || 'DLC';
+  $('#pQty').value = p.qty || 1;
+  $('#pNote').value = p.note || '';
+
+  selectedPlaces = editId
+    ? productPlaces(p).map(x => ({loc: x.loc, place: x.place}))
+    : [];
+
+  const recentLoc = state.lastLocation;
+  const recentPlace = state.lastPlace;
+  const validRecent = recentLoc && recentPlace &&
+    state.locations.includes(recentLoc) &&
+    (state.placeByLoc[recentLoc] || []).includes(recentPlace);
+
+  if (!editId && validRecent) {
+    selectedPlaces.push({loc: recentLoc, place: recentPlace});
+  }
+
+  const first = selectedPlaces[0];
+  const loc = first?.loc || recentLoc || state.locations[0] || '';
+  fillFormLocations(loc);
+  fillFormPlaces(first?.place || (loc === recentLoc ? recentPlace : ''));
+  renderSelectedPlaces();
+  setPrev();
+
+  $('#pSaveDup').style.display = editId ? 'none' : '';
+  $('#mForm').classList.add('open');
+};
+
+readForm = function () {
+  const name = $('#pName').value.trim();
+
+  if (!name) {
+    toast('Le nom du produit est obligatoire');
+    return null;
+  }
+
+  if (!selectedPlaces.length) {
+    toast('Associez au moins un lieu et un emplacement');
+    return null;
+  }
+
+  if (selectedPlaces.some(x =>
+    !state.locations.includes(x.loc) ||
+    !(state.placeByLoc[x.loc] || []).includes(x.place)
+  )) {
+    toast('Un lieu ou emplacement associé n’existe plus');
+    return null;
+  }
+
+  return {
+    name,
+    brand: $('#pBrand').value.trim(),
+    barcode: $('#pCode').value.trim(),
+    date: $('#pDate').value,
+    type: $('#pType').value,
+    qty: Math.max(1, parseInt($('#pQty').value, 10) || 1),
+    places: selectedPlaces.map(x => ({...x})),
+    note: $('#pNote').value.trim(),
+    photo: photoData
+  };
+};
+
+saveProduct = function (dup) {
+  const d = readForm();
+  if (!d) return;
+
+  if (editId) {
+    Object.assign(state.products.find(x => x.id === editId), d);
+  } else {
+    state.products.push({id: uid(), added: todayStr(), ...d});
+  }
+
+  /* Le dernier couple ajouté sert de choix proposé au prochain ajout/scan. */
+  const last = d.places[d.places.length - 1];
+  state.lastLocation = last.loc;
+  state.lastPlace = last.place;
+
+  if (d.barcode) {
+    state.known[d.barcode] = {
+      name: d.name, brand: d.brand, photo: d.photo
+    };
+  }
+
+  save();
+  renderList();
+  toast(editId ? 'Produit modifié' : 'Produit ajouté');
+
+  if (dup) {
+    editId = null;
+    $('#pDate').value = '';
+    $('#formTitle').textContent = 'Nouvel exemplaire';
+    $('#pDate').focus();
+  } else {
+    closeForm();
+  }
+};
+
+/* Fiche et historique */
+openDetail = function (id) {
+  const p = state.products.find(x => x.id === id);
+  if (!p) return;
+
+  const st = status(p);
+
+  $('#detail').innerHTML = `
+    <h2>${esc(p.name)}</h2>
+    ${p.photo ? `<img class="photoPrev" src="${p.photo}">` : ''}
+    <p><span class="badge ${bcls(st)}">${dayText(p)}</span></p>
+    <p><b>Lieux / emplacements :</b><br>
+      ${productPlaces(p).map(x =>
+        `${esc(x.loc)} / ${esc(x.place)}`
+      ).join('<br>') || 'Non renseigné'}
+    </p>
+    <p>
+      ${p.brand ? '<b>Marque :</b> ' + esc(p.brand) + '<br>' : ''}
+      <b>${esc(p.type)} :</b> ${p.date ? fmtDate(p.date) : 'Sans date'}<br>
+      <b>Quantité :</b> ${p.qty}
+      ${p.barcode ? '<br><b>Code-barres :</b> ' + esc(p.barcode) : ''}
+      ${p.note ? '<br><b>Note :</b> ' + esc(p.note) : ''}
+      <br><small>Ajouté le ${fmtDate(p.added)}</small>
+    </p>
+    <div class="row">
+      <button class="btn" id="dEat">✅ Consommé</button>
+      <button class="btn danger" id="dBin">🗑 Jeté</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sec" id="dEdit">✏️ Modifier</button>
+      <button class="btn sec" id="dDel">Supprimer</button>
+    </div>
+    <button class="btn sec full" id="dClose">Fermer</button>
+  `;
+
+  $('#mDetail').classList.add('open');
+  $('#dClose').onclick = closeDetail;
+  $('#dEdit').onclick = () => { closeDetail(); openForm(p); };
+  $('#dEat').onclick = () => archive(p, 'consomme');
+  $('#dBin').onclick = () => archive(p, 'jete');
+  $('#dDel').onclick = () => {
+    if (confirm('Supprimer définitivement ce produit ?')) {
+      state.products = state.products.filter(x => x.id !== p.id);
+      save();
+      renderList();
+      closeDetail();
+    }
+  };
+};
+
+archive = function (p, how) {
+  const done = q => {
+    state.history.push({
+      id: uid(),
+      name: p.name,
+      /* Compatibilité des statistiques existantes. */
+      cat: placeText(p),
+      places: productPlaces(p).map(x => ({...x})),
+      date: p.date,
+      how,
+      qty: q,
+      when: todayStr()
+    });
+
+    if (q >= p.qty) {
+      state.products = state.products.filter(x => x.id !== p.id);
+    } else {
+      p.qty -= q;
+    }
+
+    save();
+    renderList();
+    closeDetail();
+
+    if (how === 'consomme') {
+      sheet(
+        `<h2>Racheter ?</h2><p>Ajouter « ${esc(p.name)} » à la liste de courses ?</p>`,
+        [
+          {
+            label: 'Oui, ajouter', cls: '',
+            fn: () => {
+              state.shopping.push({
+                id: uid(), name: p.name, done: false
+              });
+              save();
+              toast('Ajouté aux courses');
+            }
+          },
+          {label: 'Non'}
+        ]
+      );
+    } else {
+      toast('Produit archivé');
+    }
+  };
+
+  if (p.qty > 1) {
+    sheet(
+      `<h2>${p.qty} exemplaires</h2><p>Combien ont été ${
+        how === 'consomme' ? 'consommés' : 'jetés'
+      } ?</p>`,
+      [
+        {label: 'Un seul', fn: () => done(1)},
+        {label: 'Tous (' + p.qty + ')', cls: '', fn: () => done(p.qty)},
+        {label: 'Annuler'}
+      ]
+    );
+  } else {
+    done(1);
+  }
+};
+
+/* Le scanner doit afficher les nouveaux emplacements. */
+onCode = async function (code) {
+  stopScan();
+  if (navigator.vibrate) navigator.vibrate(80);
+
+  const found = state.products.filter(p => p.barcode === code);
+
+  if (found.length) {
+    sheet(
+      `<h2>Produit reconnu</h2>
+       <p>${found.length} exemplaire(s) de
+       <b>${esc(found[0].name)}</b> dans votre inventaire :</p>` +
+      found.map(p => `
+        <div class="card item ${status(p)}" style="cursor:default">
+          <div class="t">
+            <div class="n">${esc(p.name)}
+              ${p.qty > 1 ? ' ×' + p.qty : ''}</div>
+            <div class="s">${p.date ? fmtDate(p.date) : 'Sans date'}
+              · ${esc(placeText(p))}</div>
+          </div>
+          <span class="badge ${bcls(status(p))}">${dayText(p)}</span>
+        </div>
+      `).join(''),
+      [
+        {
+          label: 'Voir la fiche', cls: '',
+          fn: () => {
+            showView('list');
+            openDetail(found[0].id);
+          }
+        },
+        {
+          label: 'Ajouter un nouvel exemplaire',
+          fn: () => newFromCode(code)
+        },
+        {label: 'Rescanner', fn: startScan}
+      ]
+    );
+    return;
+  }
+
+  newFromCode(code);
+};
+
+/* Réglages */
+renderSettings = function () {
+  ensurePlaces();
+
+  document.querySelectorAll('input[name=delay]').forEach(r => {
+    r.checked = +r.value === state.settings.delay;
+  });
+  $('#hour').value =
+    String(state.settings.hour).padStart(2, '0') + ':00';
+  $('#themeBtn').textContent =
+    state.settings.theme === 'dark'
+      ? '☀️ Mode clair' : '🌙 Mode sombre';
+
+  notifState();
+
+  $('#locationsList').innerHTML = state.locations.map(loc => `
+    <span>${esc(loc)}
+      <b data-loc="${esc(loc)}" title="Supprimer">✕</b>
+    </span>
+  `).join('');
+
+  $('#locationsList').querySelectorAll('b').forEach(b => {
+    b.onclick = () => deleteLocation(b.dataset.loc);
+  });
+
+  const current = $('#settingsLoc').value;
+  $('#settingsLoc').innerHTML = locationOptions(current);
+  if (state.locations.includes(current)) $('#settingsLoc').value = current;
+
+  renderSettingsPlaces();
+};
+
+function renderSettingsPlaces() {
+  const loc = $('#settingsLoc').value;
+  $('#placesList').innerHTML = (state.placeByLoc[loc] || []).map(place => `
+    <span>${esc(place)}
+      <b data-place="${esc(place)}" title="Supprimer">✕</b>
+    </span>
+  `).join('');
+
+  $('#placesList').querySelectorAll('b').forEach(b => {
+    b.onclick = () => deletePlace(loc, b.dataset.place);
+  });
+}
+
+$('#settingsLoc').onchange = renderSettingsPlaces;
+
+$('#locationAdd').onclick = () => {
+  const loc = $('#locationNew').value.trim();
+  if (!loc) return;
+
+  if (state.locations.some(x =>
+    x.toLowerCase() === loc.toLowerCase()
+  )) {
+    toast('Ce lieu existe déjà');
+    return;
+  }
+
+  state.locations.push(loc);
+  state.placeByLoc[loc] = ['Placard', 'Frigo', 'Congélateur'];
+  $('#locationNew').value = '';
+  save();
+  fillCats();
+  renderSettings();
+  $('#settingsLoc').value = loc;
+  renderSettingsPlaces();
+  toast('Lieu créé');
+};
+
+function deleteLocation(loc) {
+  const used = state.products.filter(p =>
+    productPlaces(p).some(x => x.loc === loc)
+  ).length;
+
+  if (used) {
+    toast(`${used} produit(s) utilisent ce lieu : suppression refusée`);
+    return;
+  }
+  if (!confirm(`Supprimer le lieu « ${loc} » et ses emplacements ?`)) {
+    return;
+  }
+
+  state.locations = state.locations.filter(x => x !== loc);
+  delete state.placeByLoc[loc];
+
+  if (state.lastLocation === loc) {
+    state.lastLocation = '';
+    state.lastPlace = '';
+  }
+
+  save();
+  fillCats();
+  renderSettings();
+  renderList();
+}
+
+$('#placeAdd').onclick = () => {
+  const loc = $('#settingsLoc').value;
+  const place = $('#placeNew').value.trim();
+
+  if (!loc) {
+    toast('Créez d’abord un lieu');
+    return;
+  }
+  if (!place) return;
+
+  if ((state.placeByLoc[loc] || []).some(x =>
+    x.toLowerCase() === place.toLowerCase()
+  )) {
+    toast('Cet emplacement existe déjà dans ce lieu');
+    return;
+  }
+
+  state.placeByLoc[loc].push(place);
+  $('#placeNew').value = '';
+  save();
+  fillCats();
+  renderSettingsPlaces();
+  toast('Emplacement créé');
+};
+
+function deletePlace(loc, place) {
+  const used = state.products.filter(p =>
+    productPlaces(p).some(x =>
+      x.loc === loc && x.place === place
+    )
+  ).length;
+
+  if (used) {
+    toast(`${used} produit(s) utilisent cet emplacement : suppression refusée`);
+    return;
+  }
+  if (!confirm(`Supprimer « ${place} » dans « ${loc} » ?`
 
 </body>
 </html>
