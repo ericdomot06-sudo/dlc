@@ -1090,7 +1090,83 @@ function deletePlace(loc, place) {
     toast(`${used} produit(s) utilisent cet emplacement : suppression refusée`);
     return;
   }
-  if (!confirm(`Supprimer « ${place} » dans « ${loc} » ?`
+  if (!confirm(`Supprimer « ${place} » dans « ${loc} » ?`)) {
+    return;
+  }
 
+  state.placeByLoc[loc] = (state.placeByLoc[loc] || [])
+    .filter(x => x !== place);
+
+  if (state.lastLocation === loc && state.lastPlace === place) {
+    state.lastLocation = '';
+    state.lastPlace = '';
+  }
+
+  save();
+  fillCats();
+  renderSettingsPlaces();
+  renderList();
+}
+
+/* ---------- Exports adaptés aux lieux (remplace « Catégorie ») ---------- */
+$('#expCsv').onclick = () => {
+  const rows = [['Nom','Marque','Lieux / Emplacements','Type','Date','Jours restants','Statut','Quantité','Code-barres','Note']]
+    .concat(exportSet().map(p => [
+      p.name, p.brand || '', placeText(p), p.type,
+      p.date ? fmtDate(p.date) : 'Sans date',
+      daysLeft(p.date), stLabel[status(p)], p.qty,
+      p.barcode || '', p.note || ''
+    ]));
+  const csv = '\ufeff' + rows.map(r =>
+    r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')
+  ).join('\r\n');
+  shareFile(new Blob([csv], {type: 'text/csv'}), 'frigotrack_' + todayStr() + '.csv');
+};
+
+$('#expPdf').onclick = async () => {
+  try {
+    await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js');
+  } catch (e) {
+    toast('Connexion internet nécessaire pour le PDF');
+    return;
+  }
+  const {jsPDF} = window.jspdf;
+  const doc = new jsPDF();
+  const a = exportSet();
+  doc.setFontSize(16);
+  doc.text('FrigoTrack – inventaire au ' + fmtDate(todayStr()), 14, 16);
+  doc.setFontSize(10);
+  doc.text(`${a.length} produit(s) · alerte à ${state.settings.delay} jours`, 14, 23);
+  doc.autoTable({
+    startY: 28,
+    head: [['Produit', 'Lieu / Emplacement', 'Type', 'Date', 'Jours', 'Statut', 'Qté']],
+    body: a.map(p => [
+      p.name + (p.brand ? ' (' + p.brand + ')' : ''),
+      placeText(p), p.type,
+      p.date ? fmtDate(p.date) : 'Sans date',
+      daysLeft(p.date), stLabel[status(p)], p.qty
+    ]),
+    styles: {fontSize: 9},
+    headStyles: {fillColor: [255,176,136], textColor: [60,40,30]},
+    didParseCell: d => {
+      if (d.section === 'body' && d.column.index === 5) {
+        const v = d.cell.raw;
+        d.cell.styles.fillColor =
+          v === 'Périmé' ? [255,207,207] :
+          v === 'Bientôt' ? [255,231,184] : [207,239,217];
+      }
+    }
+  });
+  shareFile(doc.output('blob'), 'frigotrack_' + todayStr() + '.pdf');
+};
+
+/* Actualise l'affichage si l'état est déjà chargé */
+if (state) {
+  ensurePlaces();
+  fillCats();
+  renderList();
+}
+</script>
 </body>
 </html>
